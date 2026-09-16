@@ -1,0 +1,1999 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include <LittleFS.h>
+
+const char* WIFI_SSID = "Yanka";
+const char* WIFI_PASSWORD = "21021978";
+
+// =====================================================
+// OLED Дисплей
+// =====================================================
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+
+#define I2C_SDA 8
+#define I2C_SCL 9
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  -1
+);
+
+// =====================================================
+// Бузер
+// =====================================================
+
+#define BUZZER_PIN 12
+
+// =====================================================
+// Джойстик
+// =====================================================
+
+// Аналогові осі
+#define JOY_X 1
+#define JOY_Y 2
+
+// Кнопка джойстика
+#define JOY_SW 4
+
+// =====================================================
+// Налаштування джойстика
+// =====================================================
+
+// Центр джойстика приблизно 2048
+// Значення треба буде відкалібрувати пізніше.
+
+#define JOY_CENTER 2048
+
+// Dead zone.
+// У цьому діапазоні джойстик вважається нерухомим.
+
+#define JOY_DEADZONE 700
+
+#define BUZZER_PIN 12
+
+// =====================================================
+// Клас Файлу
+// =====================================================
+
+class MyFile {
+
+public:
+
+  String name;
+  String type;
+  String content;
+
+  MyFile(
+    String name,
+    String type,
+    String content
+  ) {
+
+    this->name = name;
+    this->type = type;
+    this->content = content;
+  }
+
+  String open() {
+
+    if (type == "txt") {
+
+      return content;
+    }
+
+    return "";
+  }
+};
+
+// =====================================================
+// Файлова система
+// =====================================================
+
+class Files {
+
+public:
+
+  File* filelist[20];
+
+  Files() {
+
+    for (int i = 0; i < 20; i++) {
+
+      filelist[i] = nullptr;
+    }
+  }
+
+  void addFile(
+    File* file,
+    int position
+  ) {
+
+    if (
+      position >= 0 &&
+      position < 20
+    ) {
+
+      filelist[position] = file;
+    }
+  }
+};
+
+// Глобальна файлова система
+
+Files FileSystem;
+
+// =====================================================
+// Екрани
+// =====================================================
+
+enum Screen {
+  DESKTOP,
+  FILE_MANAGER,
+  TEXT_EDITOR,
+  CALCULATOR,
+  SETTINGS,
+  GAMES,
+  NETWORK,
+  TERMINAL,
+  PAINT,
+  MUSIC,
+  CLOCK,
+  SYSTEM_INFO,
+  SAVE_FILE
+};
+
+// Поточний екран
+
+Screen currentScreen = DESKTOP;
+
+//Sae file name
+
+String saveFileName = "";
+
+bool saveFileFromTerminal = false;
+
+//for file system
+
+int selectedFile = 0;
+const int visibleFiles = 5;
+
+// =====================================================
+// Desktop
+// =====================================================
+
+int selectedApp = 0;
+int firstApp = 0;
+
+const int strings = 5;
+const int appCount = 11;
+
+// =====================================================
+// Стан джойстика
+// =====================================================
+
+bool joystickMoved = false;
+
+bool joystickXMoved = false;
+bool joystickYMoved = false;
+
+bool joystickButtonWasPressed = false;
+
+// =====================================================
+// VIRTUAL KEYBOARD
+// =====================================================
+
+const char* keyboard[] = {
+  "ABCDEF",
+  "GHIJKL",
+  "MNOPQR",
+  "STUVWX",
+  "YZ0123"
+};
+
+const int keyboardRows = 5;
+const int keyboardCols = 6;
+
+int keyboardRow = 0;
+int keyboardCol = 0;
+
+String editorText = "";
+
+const char* functionKeys[] = {
+  "BACK",
+  "OK"
+};
+
+const int functionKeyCount = 2;
+int selectedFunctionKey = 0;
+
+// =====================================================
+// VIRTUAL KEYBOARD DIGITS
+// =====================================================
+
+const char* keyboardDigits[] = {
+  "012345",
+  "6789+-",
+  "*/^!&?",
+  ":.,;#@"
+};
+
+const int keyboardRowsDigits = 4;
+const int keyboardColsDigits = 6;
+
+int keyboardRowDigits = 0;
+int keyboardColDigits = 0;
+
+String calculatorText = "";
+
+
+
+// =====================================================
+// NETWORK
+// =====================================================
+
+bool espNowConnected = false;
+
+
+
+void drawPaint();
+void drawMusic();
+void drawClock();
+void drawSystemInfo();
+
+void paintInput();
+void musicInput();
+void clockInput();
+void systemInfoInput();
+
+
+// =====================================================
+// JOYSTICK — BEEP
+// =====================================================
+
+void joystickBeep() {
+  tone(BUZZER_PIN, 2000, 50);
+}
+
+
+// =====================================================
+// JOYSTICK — DOWN
+// =====================================================
+
+bool joystickDown() {
+
+  int y = analogRead(JOY_Y);
+
+  if (y < JOY_CENTER - JOY_DEADZONE) {
+
+    if (!joystickYMoved) {
+
+      joystickYMoved = true;
+
+      joystickBeep();
+
+      return true;
+    }
+  }
+
+  // Джойстик повернувся в центр
+  if (
+    y >= JOY_CENTER - JOY_DEADZONE &&
+    y <= JOY_CENTER + JOY_DEADZONE
+  ) {
+
+    joystickYMoved = false;
+  }
+
+  return false;
+}
+
+
+// =====================================================
+// JOYSTICK — UP
+// =====================================================
+
+bool joystickUp() {
+
+  int y = analogRead(JOY_Y);
+
+  if (y > JOY_CENTER + JOY_DEADZONE) {
+
+    if (!joystickYMoved) {
+
+      joystickYMoved = true;
+
+      joystickBeep();
+
+      return true;
+    }
+  }
+
+  // Джойстик повернувся в центр
+  if (
+    y >= JOY_CENTER - JOY_DEADZONE &&
+    y <= JOY_CENTER + JOY_DEADZONE
+  ) {
+
+    joystickYMoved = false;
+  }
+
+  return false;
+}
+
+
+// =====================================================
+// JOYSTICK — RIGHT
+// =====================================================
+
+bool joystickRight() {
+
+  int x = analogRead(JOY_X);
+
+  if (x < JOY_CENTER - JOY_DEADZONE) {
+
+    if (!joystickXMoved) {
+
+      joystickXMoved = true;
+
+      joystickBeep();
+
+      return true;
+    }
+  }
+
+  // Джойстик повернувся в центр
+  if (
+    x >= JOY_CENTER - JOY_DEADZONE &&
+    x <= JOY_CENTER + JOY_DEADZONE
+  ) {
+
+    joystickXMoved = false;
+  }
+
+  return false;
+}
+
+
+// =====================================================
+// JOYSTICK — LEFT
+// =====================================================
+
+bool joystickLeft() {
+
+  int x = analogRead(JOY_X);
+
+  if (x > JOY_CENTER + JOY_DEADZONE) {
+
+    if (!joystickXMoved) {
+
+      joystickXMoved = true;
+
+      joystickBeep();
+
+      return true;
+    }
+  }
+
+  // Джойстик повернувся в центр
+  if (
+    x >= JOY_CENTER - JOY_DEADZONE &&
+    x <= JOY_CENTER + JOY_DEADZONE
+  ) {
+
+    joystickXMoved = false;
+  }
+
+  return false;
+}
+
+// =====================================================
+// JOYSTICK — BUTTON
+// =====================================================
+
+bool joystickPressed() {
+
+  bool pressed =
+    digitalRead(JOY_SW) == LOW;
+
+  if (
+    pressed &&
+    !joystickButtonWasPressed
+  ) {
+
+    joystickButtonWasPressed = true;
+
+    return true;
+  }
+
+  if (!pressed) {
+
+    joystickButtonWasPressed = false;
+  }
+
+  return false;
+}
+
+// =====================================================
+// JOYSTICK — LONG PRESS
+// =====================================================
+
+bool joystickLongPressed() {
+
+  static unsigned long pressStart = 0;
+  static bool longPressTriggered = false;
+
+  bool pressed = digitalRead(JOY_SW) == LOW;
+
+  if (pressed) {
+
+    if (pressStart == 0) {
+      pressStart = millis();
+      longPressTriggered = false;
+    }
+
+    if (
+      !longPressTriggered &&
+      millis() - pressStart >= 1000
+    ) {
+
+      longPressTriggered = true;
+
+      joystickBeep();
+
+      return true;
+    }
+  }
+
+  else {
+
+    pressStart = 0;
+    longPressTriggered = false;
+  }
+
+  return false;
+}
+
+void drawVirtualKeyboard() {
+
+  // Звичайні символи
+  for (int row = 0; row < keyboardRows; row++) {
+
+    display.setCursor(0, 22 + row * 7);
+
+    for (int col = 0; col < keyboardCols; col++) {
+
+      char key = keyboard[row][col];
+
+      if (row == keyboardRow && col == keyboardCol) {
+        display.print("[");
+        display.print(key);
+        display.print("]");
+      } else {
+        display.print(" ");
+        display.print(key);
+        display.print(" ");
+      }
+    }
+  }
+
+  // Функціональний ряд
+  display.setCursor(0, 52);
+
+  if (keyboardRow == keyboardRows) {
+
+    if (keyboardCol == 0) {
+      display.print("[BACK] ");
+      display.print(" OK");
+    } 
+    else {
+      display.print(" BACK ");
+      display.print("[OK]");
+    }
+
+  } else {
+
+    display.print(" BACK   OK");
+  }
+}
+
+void handleVirtualKeyboard() {
+
+  // Вправо
+  if (joystickRight()) {
+
+    if (keyboardCol < keyboardCols - 1) {
+      keyboardCol++;
+    }
+
+    drawTextEditor();
+    return;
+  }
+
+  // Вліво
+  if (joystickLeft()) {
+
+    if (keyboardCol > 0) {
+      keyboardCol--;
+    }
+
+    drawTextEditor();
+    return;
+  }
+
+  // Вниз
+  if (joystickDown()) {
+
+    if (keyboardRow < keyboardRows) {
+      keyboardRow++;
+    }
+
+    drawTextEditor();
+    return;
+  }
+
+  // Вгору
+  if (joystickUp()) {
+
+    if (keyboardRow > 0) {
+      keyboardRow--;
+    }
+
+    drawTextEditor();
+    return;
+  }
+
+  // Натискання
+  if (joystickPressed()) {
+
+    // =========================
+    // ФУНКЦІОНАЛЬНИЙ РЯД
+    // =========================
+
+    if (keyboardRow == keyboardRows) {
+
+      // BACK
+      if (keyboardCol == 0) {
+
+        // Видалити останній символ
+        if (editorText.length() > 0) {
+          editorText.remove(editorText.length() - 1);
+        }
+
+      }
+
+      // OK
+      else if (keyboardCol == 1) {
+
+        // Тут буде дія OK
+        // Наприклад, відкрити вікно збереження
+
+        currentScreen = SAVE_FILE;
+        drawSaveFile();
+
+        return;
+      }
+
+      drawTextEditor();
+      return;
+    }
+
+
+    // =========================
+    // ЗВИЧАЙНИЙ СИМВОЛ
+    // =========================
+
+    if (keyboardRow >= 0 &&
+        keyboardRow < keyboardRows &&
+        keyboardCol >= 0 &&
+        keyboardCol < keyboardCols) {
+
+      editorText += keyboard[keyboardRow][keyboardCol];
+    }
+
+    drawTextEditor();
+    return;
+  }
+}
+
+void drawDigitsKeyboard() {
+
+  for (int row = 0; row < keyboardRowsDigits; row++) {
+
+    display.setCursor(0, 22 + row * 8);
+
+    for (int col = 0; col < keyboardColsDigits; col++) {
+
+      char key = keyboardDigits[row][col];
+
+      if (row == keyboardRowDigits &&
+          col == keyboardColDigits) {
+
+        display.print("[");
+        display.print(key);
+        display.print("]");
+
+      } else {
+
+        display.print(" ");
+        display.print(key);
+        display.print(" ");
+      }
+    }
+  }
+}
+
+void handleDigitsKeyboard() {
+
+  // Вправо
+  if (joystickRight()) {
+
+    if (keyboardColDigits < keyboardColsDigits - 1) {
+      keyboardColDigits++;
+    }
+
+    drawCalculator();
+    return;
+  }
+
+  // Вліво
+  if (joystickLeft()) {
+
+    if (keyboardColDigits > 0) {
+      keyboardColDigits--;
+    }
+
+    drawCalculator();
+    return;
+  }
+
+  // Вниз
+  if (joystickDown()) {
+
+    if (keyboardRowDigits < keyboardRowsDigits - 1) {
+      keyboardRowDigits++;
+    }
+
+    drawCalculator();
+    return;
+  }
+
+  // Вгору
+  if (joystickUp()) {
+
+    if (keyboardRowDigits > 0) {
+      keyboardRowDigits--;
+    }
+
+    drawCalculator();
+    return;
+  }
+
+  // Вибір символу
+  if (joystickPressed()) {
+
+    if (keyboardRowDigits >= 0 &&
+        keyboardRowDigits < keyboardRowsDigits &&
+        keyboardColDigits >= 0 &&
+        keyboardColDigits < keyboardColsDigits) {
+
+      editorText += keyboardDigits[
+        keyboardRowDigits
+      ][
+        keyboardColDigits
+      ];
+    }
+
+    drawCalculator();
+    return;
+  }
+}
+
+void drawSaveFile() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Заголовок
+  display.setCursor(0, 0);
+  display.print("SAVE FILE");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  // Поле імені файлу
+  display.setCursor(0, 12);
+  display.print("Name:");
+
+  display.setCursor(0, 21);
+
+  String visibleName = saveFileName;
+
+  if (visibleName.length() > 20) {
+    visibleName = visibleName.substring(
+      visibleName.length() - 20
+    );
+  }
+
+  display.print(visibleName);
+  display.print("_");
+
+  // Підказки
+  display.setCursor(0, 42);
+  display.print("Press: add char");
+
+  display.setCursor(0, 50);
+  display.print("Hold: save/back");
+
+  display.display();
+}
+
+void openSaveFileWindow(bool fromTerminal) {
+
+  saveFileName = "";
+  saveFileFromTerminal = fromTerminal;
+
+  currentScreen = SAVE_FILE;
+
+  drawSaveFile();
+}
+
+void saveFileInput() {
+
+  // Довге натискання — скасування
+  if (joystickLongPressed()) {
+
+    currentScreen = saveFileFromTerminal
+                    ? TERMINAL
+                    : TEXT_EDITOR;
+
+    if (saveFileFromTerminal) {
+      drawTerminal();
+    } else {
+      drawTextEditor();
+    }
+
+    return;
+  }
+
+  // Переміщення вправо
+  if (joystickRight()) {
+
+    if (keyboardCol < keyboardCols - 1) {
+      keyboardCol++;
+    }
+
+    drawSaveFile();
+    return;
+  }
+
+  // Переміщення вліво
+  if (joystickLeft()) {
+
+    if (keyboardCol > 0) {
+      keyboardCol--;
+    }
+
+    drawSaveFile();
+    return;
+  }
+
+  // Переміщення вниз
+  if (joystickDown()) {
+
+    if (keyboardRow < keyboardRows - 1) {
+      keyboardRow++;
+    }
+
+    drawSaveFile();
+    return;
+  }
+
+  // Переміщення вгору
+  if (joystickUp()) {
+
+    if (keyboardRow > 0) {
+      keyboardRow--;
+    }
+
+    drawSaveFile();
+    return;
+  }
+
+  // Вибір символу
+  if (joystickPressed()) {
+
+    char key = keyboard[keyboardRow][keyboardCol];
+
+    saveFileName += key;
+
+    drawSaveFile();
+    return;
+  }
+}
+
+void saveCurrentFile() {
+
+  if (saveFileName.length() == 0) {
+    return;
+  }
+
+  String path = "/" + saveFileName + ".txt";
+
+  File file = LittleFS.open(path, "w");
+
+  if (!file) {
+    return;
+  }
+
+  file.print(editorText);
+  file.close();
+
+  currentScreen = FILE_MANAGER;
+  drawFileManager();
+}
+
+int getFileCount() {
+  int count = 0;
+
+  File root = LittleFS.open("/");
+  File file = root.openNextFile();
+
+  while (file) {
+    if (!file.isDirectory()) {
+      count++;
+    }
+
+    file = root.openNextFile();
+  }
+
+  return count;
+}
+
+void openSelectedFile() {
+  File root = LittleFS.open("/");
+  File file = root.openNextFile();
+
+  int fileIndex = 0;
+
+  while (file) {
+    if (!file.isDirectory()) {
+      if (fileIndex == selectedFile) {
+        String content = file.readString();
+
+        Serial.println("Opening file:");
+        Serial.println(file.name());
+        Serial.println(content);
+
+        // Поки що показуємо вміст у редакторі
+        editorText = content;
+        currentScreen = TEXT_EDITOR;
+        drawTextEditor();
+
+        return;
+      }
+
+      fileIndex++;
+    }
+
+    file = root.openNextFile();
+  }
+}
+
+
+// =====================================================
+// BOOT SCREEN
+// =====================================================
+
+void showBootScreen() {
+
+  display.clearDisplay();
+
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(25, 10);
+
+  display.println("MY OS");
+
+  display.setTextSize(1);
+
+  display.setCursor(25, 35);
+
+  display.println("Starting...");
+
+  display.display();
+
+  delay(1000);
+}
+
+// =====================================================
+// DESKTOP
+// =====================================================
+
+void drawDesktop() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Заголовок
+  display.setCursor(45, 0);
+  display.print("MY OS");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  // Програми
+  const char* apps[] = {
+
+    "Files",
+    "Text editor",
+    "Calculator",
+    "Settings",
+    "Games",
+    "Network",
+    "Terminal",
+    "Paint",
+    "Music",
+    "Clock",
+    "System Info"
+  };
+
+  for (
+    int i = firstApp;
+    i < firstApp + strings && i < appCount;
+    i++
+  ) {
+
+    display.setCursor(
+      0,
+      12 + (i - firstApp) * 8
+    );
+
+    if (i == selectedApp) {
+      display.print("> ");
+    }
+    else {
+      display.print("  ");
+    }
+
+    display.print(apps[i]);
+  }
+
+  // Нижня панель
+  display.drawLine(
+    0,
+    52,
+    127,
+    52,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.print("Joy Move  Push Open");
+
+  display.display();
+}
+
+// =====================================================
+// DESKTOP INPUT
+// =====================================================
+
+void desktopInput() {
+
+  // =========================================
+  // Вгору
+  // =========================================
+
+  if (joystickUp()) {
+
+    if (selectedApp > 0) {
+
+      selectedApp--;
+
+      // Якщо вибір вийшов вище видимої області
+      if (selectedApp < firstApp) {
+        firstApp--;
+      }
+
+      drawDesktop();
+    }
+
+    return;
+  }
+
+
+  // =========================================
+  // Вниз
+  // =========================================
+
+  if (joystickDown()) {
+
+    if (selectedApp < appCount - 1) {
+
+      selectedApp++;
+
+      // Якщо вибір вийшов нижче видимої області
+      if (selectedApp >= firstApp + strings) {
+        firstApp++;
+      }
+
+      drawDesktop();
+    }
+
+    return;
+  }
+
+
+  // =========================================
+  // Натискання
+  // =========================================
+
+  if (joystickPressed()) {
+
+    switch (selectedApp) {
+
+      case 0:
+
+        currentScreen = FILE_MANAGER;
+        drawFileManager();
+
+        break;
+
+
+      case 1:
+
+        currentScreen = TEXT_EDITOR;
+        drawTextEditor();
+
+        break;
+
+
+      case 2:
+
+        currentScreen = CALCULATOR;
+        drawCalculator();
+
+        break;
+
+
+      case 3:
+
+        currentScreen = SETTINGS;
+        drawSettings();
+
+        break;
+
+
+      case 4:
+
+        currentScreen = GAMES;
+        drawGames();
+
+        break;
+
+
+      case 5:
+
+        currentScreen = NETWORK;
+        drawNetwork();
+
+        break;
+
+
+      case 6:
+
+        currentScreen = TERMINAL;
+        drawTerminal();
+
+        break;
+
+
+      case 7:
+
+        currentScreen = PAINT;
+        drawPaint();
+
+        break;
+
+
+      case 8:
+
+        currentScreen = MUSIC;
+        drawMusic();
+
+        break;
+
+
+      case 9:
+
+        currentScreen = CLOCK;
+        drawClock();
+
+        break;
+
+
+      case 10:
+
+        currentScreen = SYSTEM_INFO;
+        drawSystemInfo();
+
+        break;
+    }
+
+    return;
+  }
+}
+// =====================================================
+// FILE MANAGER
+// =====================================================
+
+void drawFileManager() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("FILE MANAGER");
+
+  display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+  File root = LittleFS.open("/");
+  File file = root.openNextFile();
+
+  int fileIndex = 0;
+  int drawnFiles = 0;
+
+  while (file && drawnFiles < visibleFiles) {
+    if (!file.isDirectory()) {
+      String fileName = file.name();
+
+      // Пропускаємо файли перед вибраним елементом
+      if (fileIndex >= selectedFile) {
+        display.setCursor(0, 13 + drawnFiles * 9);
+
+        if (fileIndex == selectedFile) {
+          display.print(">");
+        } else {
+          display.print(" ");
+        }
+
+        // Виводимо максимум 19 символів назви
+        if (fileName.length() > 19) {
+          fileName = fileName.substring(0, 19);
+        }
+
+        display.println(fileName);
+        drawnFiles++;
+      }
+
+      fileIndex++;
+    }
+
+    file = root.openNextFile();
+  }
+
+  if (fileIndex == 0) {
+    display.setCursor(0, 20);
+    display.println("No files");
+  }
+
+  display.setCursor(0, 56);
+  display.println("Hold = Back");
+
+  display.display();
+}
+
+void fileManagerInput() {
+  int fileCount = getFileCount();
+
+  if (joystickLongPressed()) {
+    currentScreen = DESKTOP;
+    selectedFile = 0;
+    drawDesktop();
+    return;
+  }
+
+  if (fileCount == 0) {
+    return;
+  }
+
+  if (joystickDown()) {
+    if (selectedFile < fileCount - 1) {
+      selectedFile++;
+      drawFileManager();
+    }
+
+    return;
+  }
+
+  if (joystickUp()) {
+    if (selectedFile > 0) {
+      selectedFile--;
+      drawFileManager();
+    }
+
+    return;
+  }
+
+  if (joystickPressed()) {
+    openSelectedFile();
+    return;
+  }
+}
+
+// =====================================================
+// TEXT EDITOR
+// =====================================================
+
+void drawTextEditor() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.print("TEXT EDITOR");
+
+  display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+  display.setCursor(0, 12);
+
+  String visibleText = editorText;
+
+  if (visibleText.length() > 13) {
+    visibleText = visibleText.substring(
+      visibleText.length() - 13
+    );
+  }
+
+  display.print(visibleText);
+
+  // Виклик окремої функції клавіатури
+  drawVirtualKeyboard();
+
+  display.display();
+}
+
+void textEditorInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+    editorText = "";
+    drawDesktop();
+
+    return;
+  }
+
+  handleVirtualKeyboard();
+}
+
+// =====================================================
+// CALCULATOR
+// =====================================================
+
+void drawCalculator() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.print("CALCULATOR");
+
+  display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+  display.setCursor(0, 12);
+  display.print(editorText);
+
+  // Виклик цифрової клавіатури
+  drawDigitsKeyboard();
+
+  display.display();
+}
+
+void calculatorInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+    drawDesktop();
+
+    return;
+  }
+
+  handleDigitsKeyboard();
+}
+
+// =====================================================
+// SETTINGS
+// =====================================================
+
+void drawSettings() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(
+    0,
+    0
+  );
+
+  display.println("SETTINGS");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    20
+  );
+
+  display.println("Coming soon...");
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.println("Hold joystick = Back");
+
+  display.display();
+}
+
+void settingsInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+// =====================================================
+// GAMES
+// =====================================================
+
+void drawGames() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(
+    0,
+    0
+  );
+
+  display.println("GAMES");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    20
+  );
+
+  display.println("Coming soon...");
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.println("Hold joystick = Back");
+
+  display.display();
+}
+
+void gamesInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+
+// =====================================================
+// NEtwork
+// =====================================================
+
+void drawNetwork() {
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.println("NETWORK");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  // =========================
+  // WIFI
+  // =========================
+
+  display.setCursor(0, 13);
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    display.println("WiFi: Connected");
+
+    display.setCursor(0, 23);
+    display.print("SSID: ");
+
+    String ssid = WiFi.SSID();
+
+    if (ssid.length() > 17) {
+      ssid = ssid.substring(0, 17);
+    }
+
+    display.println(ssid);
+
+    display.setCursor(0, 33);
+    display.print("IP: ");
+    display.println(WiFi.localIP());
+
+    display.setCursor(0, 43);
+    display.print("RSSI: ");
+    display.print(WiFi.RSSI());
+    display.println(" dBm");
+
+  } else {
+
+    display.println("WiFi: Disconnected");
+
+    display.setCursor(0, 24);
+    display.println("No connection");
+  }
+
+  // =========================
+  // ESP-NOW
+  // =========================
+
+  display.drawLine(
+    0,
+    52,
+    127,
+    52,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(0, 56);
+
+  if (espNowConnected) {
+    display.print("ESP-NOW: Connected");
+  } else {
+    display.print("ESP-NOW: Offline");
+  }
+
+  display.display();
+}
+
+void networkInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+
+
+// =====================================================
+// Terminal
+// =====================================================
+
+void drawTerminal() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.print("TERMINAL");
+
+  display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+  display.setCursor(0, 12);
+
+  String visibleText = editorText;
+
+  if (visibleText.length() > 13) {
+    visibleText = visibleText.substring(
+      visibleText.length() - 13
+    );
+  }
+
+  display.print(visibleText);
+
+  // Виклик окремої функції клавіатури
+  drawVirtualKeyboard();
+
+  display.display();
+
+}       // закриває drawTerminal
+
+
+
+void terminalInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+    editorText = "";
+    drawDesktop();
+
+    return;
+  }
+
+  handleVirtualKeyboard();
+}
+
+// =====================================================
+// Paint
+// =====================================================
+
+void drawPaint() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(
+    0,
+    0
+  );
+
+  display.println("PAINT");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    20
+  );
+
+  display.println("Coming soon...");
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.println("Hold joystick = Back");
+
+  display.display();
+}
+
+void paintInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+// =====================================================
+// Music
+// =====================================================
+
+void drawMusic() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(
+    0,
+    0
+  );
+
+  display.println("MUSIC");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    20
+  );
+
+  display.println("Coming soon...");
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.println("Hold joystick = Back");
+
+  display.display();
+}
+
+void musicInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+// =====================================================
+// Clock
+// =====================================================
+
+void drawClock() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(
+    0,
+    0
+  );
+
+  display.println("CLOCK");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    20
+  );
+
+  display.println("Coming soon...");
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.println("Hold joystick = Back");
+
+  display.display();
+}
+
+void clockInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+// =====================================================
+// SystamInfo
+// =====================================================
+
+void drawSystemInfo() {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(
+    0,
+    0
+  );
+
+  display.println("GYSTEM INFO");
+
+  display.drawLine(
+    0,
+    9,
+    127,
+    9,
+    SSD1306_WHITE
+  );
+
+  display.setCursor(
+    0,
+    20
+  );
+
+  display.println("Coming soon...");
+
+  display.setCursor(
+    0,
+    56
+  );
+
+  display.println("Hold joystick = Back");
+
+  display.display();
+}
+
+void systemInfoInput() {
+
+  if (joystickLongPressed()) {
+
+    currentScreen = DESKTOP;
+
+    drawDesktop();
+  }
+}
+
+
+// =====================================================
+// SETUP
+// =====================================================
+
+void setup() {
+
+  // -------------------------
+  // Serial
+  // -------------------------
+
+  Serial.begin(115200);
+
+  // -------------------------
+  // I2C
+  // -------------------------
+
+  Wire.begin(
+    I2C_SDA,
+    I2C_SCL
+  );
+
+  // -------------------------
+  // Бузер
+  // -------------------------
+
+  pinMode(
+    BUZZER_PIN,
+    OUTPUT
+  );
+
+  digitalWrite(
+    BUZZER_PIN,
+    LOW
+  );
+
+  // -------------------------
+  // Джойстик
+  // -------------------------
+
+  pinMode(
+    JOY_X,
+    INPUT
+  );
+
+  pinMode(
+    JOY_Y,
+    INPUT
+  );
+
+  pinMode(
+    JOY_SW,
+    INPUT_PULLUP
+  );
+
+  // -------------------------
+  // OLED
+  // -------------------------
+
+  if (
+    !display.begin(
+      SSD1306_SWITCHCAPVCC,
+      0x3C
+    )
+  ) {
+
+    Serial.println(
+      F("Помилка ініціалізації OLED!")
+    );
+
+    while (true);
+  }
+
+  // -------------------------
+  // Network
+  // -------------------------
+
+  Serial.begin(115200);
+
+  delay(1000);
+
+  Serial.println();
+  Serial.println("======================");
+  Serial.println("ESP32 WiFi TEST");
+  Serial.println("======================");
+
+  WiFi.mode(WIFI_STA);
+
+  Serial.print("MAC: ");
+  Serial.println(WiFi.macAddress());
+
+  Serial.print("Connecting to: ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  int attempts = 0;
+
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+
+    delay(500);
+
+    Serial.print(".");
+    attempts++;
+  }
+
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.println("======================");
+    Serial.println("CONNECTED!");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("RSSI: ");
+    Serial.println(WiFi.RSSI());
+    Serial.println("======================");
+
+  } else {
+
+    Serial.println("======================");
+    Serial.println("CONNECTION FAILED");
+    Serial.print("WiFi status: ");
+    Serial.println(WiFi.status());
+    Serial.println("======================");
+  }
+
+  // -------------------------
+  // Boot
+  // -------------------------
+
+  showBootScreen();
+
+  // -------------------------
+  // Початковий стан
+  // -------------------------
+
+  currentScreen = DESKTOP;
+
+  selectedApp = 0;
+
+  drawDesktop();
+}
+
+// =====================================================
+// LOOP
+// =====================================================
+
+void loop() {
+
+  switch (currentScreen) {
+
+    case DESKTOP:
+      desktopInput();
+      break;
+
+    case FILE_MANAGER:
+      fileManagerInput();
+      break;
+
+    case TEXT_EDITOR:
+      textEditorInput();
+      break;
+
+    case CALCULATOR:
+      calculatorInput();
+      break;
+
+    case SETTINGS:
+      settingsInput();
+      break;
+
+    case GAMES:
+      gamesInput();
+      break;
+
+    case NETWORK:
+      networkInput();
+      break;
+
+    case TERMINAL:
+      terminalInput();
+      break;
+
+    case PAINT:
+      paintInput();
+      break;
+
+    case MUSIC:
+      musicInput();
+      break;
+
+    case CLOCK:
+      clockInput();
+      break;
+
+    case SYSTEM_INFO:
+      systemInfoInput();
+      break;
+
+    case SAVE_FILE:
+      saveFileInput();
+      break;
+  }
+}
